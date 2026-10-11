@@ -21,11 +21,11 @@ if out="$(sh "$REPO/skills/tdd/scripts/mutate.sh" -b 'sh -n add.sh' '[ "$(sh add
   red.m green.m broken.m missing.m multiline.m)"; then
   fail "mutate.sh exited zero with mutations that were not red"
 fi
-[ "$out" = "red.m red
+[ "$out" = "red.m test-failed
 green.m GREEN
 broken.m broken
 missing.m missing
-multiline.m red" ] || fail "unexpected report: $out"
+multiline.m test-failed" ] || fail "unexpected report: $out"
 cmp -s add.sh add.orig || fail "add.sh was not restored"
 
 sh "$REPO/skills/tdd/scripts/mutate.sh" '[ "$(sh add.sh)" = 2 ]' red.m >/dev/null || fail "an all-red run exited nonzero"
@@ -38,7 +38,23 @@ case "$hint" in
 *) fail "a broken mutation printed no hint: $hint" ;;
 esac
 hint="$(sh "$REPO/skills/tdd/scripts/mutate.sh" -b 'sh -n add.sh' '[ "$(sh add.sh)" = 2 ]' red.m 2>&1 >/dev/null)"
-[ -z "$hint" ] || fail "a run with no broken mutation printed: $hint"
+case "$hint" in
+*"false && cond"*) fail "a run with no broken mutation printed a build hint: $hint" ;;
+esac
+
+# Preserve both output streams for assertion failures and runtime errors.
+# Neither is automatically certified as an assertion proving the mutation.
+out="$(sh "$REPO/skills/tdd/scripts/mutate.sh" \
+  '[ "$(sh add.sh)" = 2 ] || { echo "expected sum 2"; echo "actual sum 3" >&2; exit 1; }' red.m 2>assertion.log)"
+[ "$out" = "red.m test-failed" ] || fail "an assertion was automatically certified: $out"
+grep -q 'expected sum 2' assertion.log || fail "assertion stdout was lost"
+grep -q 'actual sum 3' assertion.log || fail "assertion stderr was lost"
+grep -q 'red.m' assertion.log || fail "assertion output did not identify its mutation"
+out="$(sh "$REPO/skills/tdd/scripts/mutate.sh" \
+  '[ "$(sh add.sh)" = 2 ] || { echo "ImportError: missing module" >&2; exit 1; }' red.m 2>runtime.log)"
+[ "$out" = "red.m test-failed" ] || fail "a runtime error was certified red: $out"
+grep -q 'ImportError: missing module' runtime.log || fail "runtime diagnostic was lost"
+cmp -s add.sh add.orig || fail "add.sh was not restored after diagnostic checks"
 
 # A TEST already red with no mutation, as `-run A|B` is once sh reads the | as
 # a pipe, would report every mutation red. The run stops before any.

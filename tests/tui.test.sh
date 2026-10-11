@@ -17,6 +17,37 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 out="$(env -u TMUX_TMPDIR sh "$TUI" show qa-t 2>&1)" && fail "tui.sh ran without TMUX_TMPDIR"
 case $out in *TMUX_TMPDIR*) ;; *) fail "tui.sh did not name TMUX_TMPDIR: $out" ;; esac
 
+# Missing sessions must fail rather than look like empty screens.
+sh "$TUI" show qa-absent >"$TMP/show.out" 2>"$TMP/show.err" && fail "show passed without a session"
+[ -s "$TMP/show.err" ] || fail "show lost the capture error"
+sh "$TUI" colors qa-absent >"$TMP/colors.out" 2>"$TMP/colors.err" && fail "colors passed without a session"
+[ -s "$TMP/colors.err" ] || fail "colors lost the capture error"
+
+# A pane can disappear after display/send-keys succeeds. Polling must propagate
+# capture failure instead of accepting absent text or a stable empty screen.
+mkdir "$TMP/fake-bin"
+cat > "$TMP/fake-bin/tmux" <<'EOF'
+#!/bin/sh
+case $1 in
+display) echo 0 ;;
+capture-pane)
+  if [ -n "${TUI_CAPTURE_ONCE:-}" ] && [ -f "$TUI_CAPTURE_ONCE" ]; then
+    rm "$TUI_CAPTURE_ONCE"
+    echo ready
+  else
+    echo 'capture failed' >&2
+    exit 1
+  fi
+  ;;
+*) exit 0 ;;
+esac
+EOF
+chmod +x "$TMP/fake-bin/tmux"
+PATH="$TMP/fake-bin:$PATH" sh "$TUI" gone qa-race text 1 >"$TMP/gone.out" 2>"$TMP/gone.err" && fail "gone passed after capture failed"
+PATH="$TMP/fake-bin:$PATH" sh "$TUI" press qa-race x >"$TMP/press.out" 2>"$TMP/press.err" && fail "press passed after capture failed"
+touch "$TMP/capture-once"
+PATH="$TMP/fake-bin:$PATH" TUI_CAPTURE_ONCE="$TMP/capture-once" sh "$TUI" press qa-race x >"$TMP/later.out" 2>"$TMP/later.err" && fail "press passed after a later capture failed"
+
 # The program shows its first screen late, so a wait that does not poll reads
 # it blank. The folder icon is U+F07B, and the tab must reach the screen as
 # spaces.
