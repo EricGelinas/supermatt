@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pick } from "../skills/orchestrate/scripts/next-issue.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { loadLocal, pick } from "../skills/orchestrate/scripts/next-issue.mjs";
 
 const issue = (number, { state = "open", labels = ["ready-for-agent"], body = "", author = "OWNER", ...extra } = {}) => ({
   number, title: `t${number}`, state, body,
@@ -91,4 +95,80 @@ test("missing summaries and body are treated as empty", () => {
   delete bare.issue_dependencies_summary;
   delete bare.sub_issues_summary;
   assert.deepEqual(numbers([bare]), [1]);
+});
+
+test("GitHub database IDs do not replace issue numbers in relationships", () => {
+  assert.deepEqual(numbers([
+    issue(10, { id: 9000, labels: [] }),
+    issue(11, { id: 9001, state: "closed", body: "## Parent\n\n#10" }),
+    issue(12, { id: 9002, body: "Blocked by: #10" }),
+  ]), [10]);
+});
+
+function localTracker(t, files) {
+  const root = mkdtempSync(join(tmpdir(), "local-issues-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const [path, body] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  }
+  return root;
+}
+
+test("local queues preserve feature identity, blockers, triage and spec priority", (t) => {
+  const root = localTracker(t, {
+    "alpha/spec.md": "# Alpha\n",
+    "alpha/issues/01-first.md": "# 01: First\nStatus: ready-for-agent\nClosed: 2026-10-12\n",
+    "beta/spec.md": "# Beta\n",
+    "beta/issues/01-first.md": "# 01: First\nStatus: ready-for-agent\n",
+    "beta/issues/02-next.md": "# 02: Next\nStatus: ready-for-agent\nBlocked by: 01\n",
+    "gamma/issues/01-bug.md": "# 01: Bug\nStatus: needs-triage\nCategory: bug\n",
+    "gamma/issues/02-ready.md": "# 02: Ready\nStatus: ready-for-agent\nBlocked by: 03\n",
+    "gamma/issues/03-done.md": "# 03: Done\nStatus: ready-for-agent\nClosed: 2026-10-12\n",
+    "gamma/issues/04-assigned.md": "# 04: Assigned\nStatus: ready-for-agent\nAssignee: someone\n",
+    "gamma/issues/05-draft.md": "# 05: Draft\nStatus: needs-info\n",
+    "gamma/decisions/01-question.md": "# Question\nStatus: ready-for-agent\n",
+    "empty/spec.md": "# No tickets yet\n",
+  });
+  const queue = picked(loadLocal(root, root));
+  assert.deepEqual(queue.map(i => [i.localPath, i.stage]), [
+    ["alpha/spec.md", "spec"], ["gamma/issues/01-bug.md", "triage"],
+    ["beta/issues/01-first.md", "ready"], ["gamma/issues/02-ready.md", "ready"],
+  ]);
+  assert.equal(queue[1].title, "Bug");
+});
+
+test("local metadata supports configured labels, CRLF, and closed specs", (t) => {
+  const root = localTracker(t, {
+    "feature/spec.md": "# Spec\r\nClosed: 2026-10-12\r\n",
+    "feature/issues/01-done.md": "# Done\r\nStatus: closed\r\n",
+    "feature/issues/02-fix.md": "# Fix\r\nStatus: investigate\r\nCategory: defect\r\nBlocked by: 01\r\n",
+  });
+  assert.deepEqual(pick(loadLocal(root, root), "agent-ready", "defect", "investigate").map(i => [i.localPath, i.stage]), [
+    ["feature/issues/02-fix.md", "triage"],
+  ]);
+});
+
+test("local queues fail on missing or ambiguous blockers instead of releasing them", (t) => {
+  for (const files of [
+    { "feature/issues/01-first.md": "# First\nStatus: ready-for-agent\nBlocked by: 99\n" },
+    { "feature/issues/01-first.md": "# First\nStatus: ready-for-agent\n", "feature/issues/01-duplicate.md": "# Duplicate\nStatus: ready-for-agent\n" },
+    { "feature/issues/01-first.md": "# First\nStatus: ready-for-agent\nBlocked by: elsewhere/02\n" },
+  ]) {
+    const root = localTracker(t, files);
+    assert.throws(() => loadLocal(root, root), /blocker|Duplicate/);
+  }
+});
+
+test("local CLI uses Markdown without calling gh and preserves paths with spaces", (t) => {
+  const root = localTracker(t, {
+    ".scratch/my feature/issues/01-first.md": "# 01: First\nStatus: ready-for-agent\n",
+    ".scratch/my feature/issues/02-next.md": "# 02: Next\nStatus: ready-for-agent\nBlocked by: 01\n",
+  });
+  const script = new URL("../skills/orchestrate/scripts/next-issue.mjs", import.meta.url);
+  const args = [script.pathname, "--local", ".scratch", "ready-for-agent", "bug", "needs-triage"];
+  const run = () => execFileSync(process.execPath, args, { cwd: root, env: { ...process.env, PATH: "" }, encoding: "utf8" });
+  assert.equal(run(), ".scratch/my feature/issues/01-first.md\tFirst\tready\n");
+  writeFileSync(join(root, ".scratch/my feature/issues/01-first.md"), "# First\nStatus: ready-for-agent\nClosed: 2026-10-12\n");
+  assert.equal(run(), ".scratch/my feature/issues/02-next.md\tNext\tready\n");
 });

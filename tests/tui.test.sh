@@ -8,7 +8,7 @@ TMP="$(mktemp -d)"
 TUI="$REPO/skills/qa/scripts/tui.sh"
 export TMUX_TMPDIR="$TMP"
 unset TMUX
-trap 'tmux kill-server 2>/dev/null || true; rm -rf "$TMP"' EXIT
+trap 'tmux kill-server 2>/dev/null || true; tmux -S "$TMP/outer.sock" kill-server 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -22,6 +22,29 @@ sh "$TUI" show qa-absent >"$TMP/show.out" 2>"$TMP/show.err" && fail "show passed
 [ -s "$TMP/show.err" ] || fail "show lost the capture error"
 sh "$TUI" colors qa-absent >"$TMP/colors.out" 2>"$TMP/colors.err" && fail "colors passed without a session"
 [ -s "$TMP/colors.err" ] || fail "colors lost the capture error"
+
+# An inherited tmux session must not override the private QA server.
+tmux -S "$TMP/outer.sock" new-session -d -s outer 'sleep 60'
+inherited=$(tmux -S "$TMP/outer.sock" display -p -t outer '#{socket_path},#{pid},0')
+TMUX="$inherited" sh "$TUI" start qa-isolated 40 10 sh -c 'echo isolated; sleep 5'
+tmux -S "$TMP/outer.sock" has-session -t qa-isolated 2>/dev/null && fail "start used the inherited server"
+sh "$TUI" wait qa-isolated isolated 5 >/dev/null || fail "the private server did not start"
+TMUX="$inherited" sh "$TUI" stop qa-isolated
+tmux has-session -t qa-isolated 2>/dev/null && fail "stop used the inherited server"
+tmux -S "$TMP/outer.sock" has-session -t outer || fail "the inherited session was changed"
+tmux -S "$TMP/outer.sock" kill-server
+
+# The launch script path can contain spaces and apostrophes too.
+quoted_tmp="$TMP/launch's dir"
+mkdir "$quoted_tmp"
+TMPDIR="$quoted_tmp" sh "$TUI" start qa-quoted 40 10 sh -c 'echo quoted-ready; sleep 5'
+sh "$TUI" wait qa-quoted quoted-ready 5 >/dev/null || fail "a quoted launch path did not start"
+[ -z "$(ls -A "$quoted_tmp")" ] || fail "a successful launch left its script behind"
+TMPDIR="$quoted_tmp" sh "$TUI" start qa-quoted 40 10 sh -c 'echo unwanted' \
+  >"$TMP/duplicate.out" 2>"$TMP/duplicate.err" && fail "a duplicate session start passed"
+[ -z "$(ls -A "$quoted_tmp")" ] || fail "a rejected start left its launch script behind"
+sh "$TUI" wait qa-quoted quoted-ready 5 >/dev/null || fail "a rejected start changed the existing session"
+sh "$TUI" stop qa-quoted
 
 # A pane can disappear after display/send-keys succeeds. Polling must propagate
 # capture failure instead of accepting absent text or a stable empty screen.

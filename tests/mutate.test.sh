@@ -56,6 +56,41 @@ out="$(sh "$REPO/skills/tdd/scripts/mutate.sh" \
 grep -q 'ImportError: missing module' runtime.log || fail "runtime diagnostic was lost"
 cmp -s add.sh add.orig || fail "add.sh was not restored after diagnostic checks"
 
+# A failed backup must stop the batch without creating the missing target
+# from the previous mutation's backup.
+printf 'absent.sh\n1+1\n====\n1+2\n' > absent.m
+code=0
+sh "$REPO/skills/tdd/scripts/mutate.sh" \
+  '[ ! -e absent.sh ] && [ "$(sh add.sh)" = 2 ]' red.m absent.m \
+  >backup.out 2>backup.err || code=$?
+[ "$code" = 2 ] || fail "a failed backup exited $code, want 2"
+[ ! -e absent.sh ] || fail "a failed backup created its target"
+cmp -s add.sh add.orig || fail "a failed backup changed the previous target"
+
+# A restore failure is fatal and retains the original bytes for recovery.
+# Inject a failing cp so this also works when the tests run as root.
+mkdir fail-restore-bin recovery
+real_cp=$(command -v cp)
+cat > fail-restore-bin/cp <<'EOF'
+#!/bin/sh
+if [ "$2" = add.sh ]; then
+  echo 'simulated restore failure' >&2
+  exit 1
+fi
+exec "$REAL_CP" "$@"
+EOF
+chmod +x fail-restore-bin/cp
+code=0
+PATH="$TMP/fail-restore-bin:$PATH" REAL_CP="$real_cp" TMPDIR="$TMP/recovery" \
+  sh "$REPO/skills/tdd/scripts/mutate.sh" '[ "$(sh add.sh)" = 2 ]' red.m \
+  >restore.out 2>restore.err || code=$?
+[ "$code" = 2 ] || fail "a failed restore exited $code, want 2"
+backup=$(sed -n 's/^mutate.sh: cannot restore add.sh; backup retained at //p' restore.err)
+[ -f "$backup" ] || fail "a failed restore lost its recovery copy"
+cmp -s "$backup" add.orig || fail "the recovery copy lost the original bytes"
+[ "$(sh add.sh)" = 3 ] || fail "the restore-failure fixture did not leave mutated code"
+cp "$backup" add.sh
+
 # A TEST already red with no mutation, as `-run A|B` is once sh reads the | as
 # a pipe, would report every mutation red. The run stops before any.
 code=0
@@ -70,6 +105,15 @@ cmp -s add.sh add.orig || fail "add.sh changed on a red baseline"
 code=0
 sh "$REPO/skills/tdd/scripts/mutate.sh" -b false '[ "$(sh add.sh)" = 2 ]' red.m >/dev/null 2>&1 || code=$?
 [ "$code" = 2 ] || fail "a broken baseline BUILD exited $code, want 2"
+
+# An explicit timeout applies before any mutation, not only to mutated TEST.
+code=0
+sh "$REPO/skills/tdd/scripts/mutate.sh" -t 1 \
+  'sleep 2; touch baseline-finished; [ "$(sh add.sh)" = 2 ]' red.m \
+  >baseline.out 2>baseline.err || code=$?
+[ "$code" = 2 ] || fail "a baseline timeout exited $code, want 2"
+[ ! -e baseline-finished ] || fail "the baseline ran past its timeout"
+cmp -s add.sh add.orig || fail "a baseline timeout changed the target"
 
 # A limit that is not whole seconds, and a machine with no perl to make the
 # process group, stop the run before any mutation.
@@ -116,5 +160,32 @@ wait "$run" || true
 ! kill -0 "$(cat stuck.pid)" 2>/dev/null || fail "an interrupted run's TEST outlived it"
 cmp -s add.sh add.orig || fail "add.sh was not restored after an interrupt"
 [ -z "$(ls -A tmpd)" ] || fail "an interrupted run left files behind: $(ls -A tmpd)"
+
+# A restore failure in the exit trap must preserve the same recovery copy.
+mkdir interrupted-recovery
+PATH="$TMP/fail-restore-bin:$PATH" REAL_CP="$real_cp" TMPDIR="$TMP/interrupted-recovery" \
+  sh "$REPO/skills/tdd/scripts/mutate.sh" \
+  '[ "$(sh add.sh)" = 2 ] || { sleep 30 & echo $! > recovery-stuck.pid; wait; }' red.m \
+  >interrupted.out 2>interrupted.err &
+run=$!
+i=0
+until [ -s recovery-stuck.pid ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 100 ]; then
+    kill -TERM "$run"
+    wait "$run" || true
+    fail "the recovery fixture never started"
+  fi
+  sleep 0.1
+done
+kill -TERM "$run"
+code=0
+wait "$run" || code=$?
+[ "$code" = 2 ] || fail "an interrupted restore failure exited $code, want 2"
+! kill -0 "$(cat recovery-stuck.pid)" 2>/dev/null || fail "an interrupted restore left TEST running"
+backup=$(sed -n 's/^mutate.sh: cannot restore add.sh; backup retained at //p' interrupted.err)
+[ -f "$backup" ] || fail "an interrupted restore lost its recovery copy"
+cmp -s "$backup" add.orig || fail "the interrupted recovery copy lost the original bytes"
+cp "$backup" add.sh
 
 echo "ok"
