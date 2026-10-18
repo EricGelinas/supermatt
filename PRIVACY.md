@@ -10,6 +10,7 @@ Your agent handles your conversation and code under the terms of its own provide
 - **`jury`** may give one vote and review seat to the same configured adapter. That adapter receives the question, options, criteria, facts, constraints, and required text evidence. Cursor and OMP require interactive confirmation immediately before launch because a repository file is untrusted input and cannot consent to their inherited configuration, MCP, hook, or session limits.
 - **`to-spec`, `to-tickets`, `triage`, `wayfinder`, `implement`, `code-review`, and `orchestrate`** read or write issues on the issue tracker you choose in `setup-supermatt-skills`: GitHub through the `gh` CLI, GitLab through the `glab` CLI, or local Markdown files.
 - **`ship-pr`** pushes the branch, opens a pull request, and merges it on GitHub through the `gh` CLI.
+- **`babysit-pr`** pushes the branch, opens a pull request, reads its review threads, comments and checks, replies to and resolves review threads, and updates the branch on GitHub through the `gh` CLI. It never merges. **`recover-ci`** reads CI logs and reruns failed jobs on GitHub through `gh` for the skill that calls it.
 - **`orchestrate`** drives Claude Code, Codex, Cursor, or OMP worker sessions through `herdr`, creates git worktrees under the repo's `.claude/worktrees/`, reads Herdr-reported session references, closes and comments on issues through the configured tracker, and shows a macOS notification when it stops. Cursor and OMP workers inherit the active session's authoritative model ID when available, otherwise their harness default.
 - **`retro`** reads local Claude Code, Codex, Cursor, or OMP session transcripts selected from verified host and workspace roots. Transcripts can contain prompts, code, tool output, credentials, and inlined skill bodies. The parser keeps this evidence local unless you explicitly publish it.
 - **`research`** reads public web pages and documentation to answer your question.
@@ -18,7 +19,7 @@ Each of those services handles the data under its own privacy policy.
 
 ## What SuperMatt writes locally
 
-Skills write files into your working directory when you use them: specs, tickets in a local tracker, `GLOSSARY.md`, ADRs, handoff documents, research notes, reports, and prototypes. They stay on your machine unless you commit and push them.
+Skills write files into your working directory when you use them: specs, tickets in a local tracker, `GLOSSARY.md`, ADRs, handoff documents, research notes, reports, and prototypes. They stay on your machine unless you commit and push them. `babysit-pr` keeps its state for each pull request under the repository's `.git/supermatt/babysit-pr/` directory, which git never commits or pushes.
 
 ## Contact
 
