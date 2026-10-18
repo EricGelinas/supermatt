@@ -120,6 +120,21 @@ test("verify reports a source link the copy pointed elsewhere", (t) => {
   assert.deepEqual(drift(run("verify")), ["changed inside-link (link target)"]);
 });
 
+test("verify detects lost executable bits while accepting source write protection", (t) => {
+  const { scratch, run } = fixture(t, (repo, git) => {
+    writeFileSync(join(repo, "run.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    chmodSync(join(repo, "run.sh"), 0o755);
+    git("add", ".");
+    git("commit", "-qm", "init");
+  });
+  assert.equal(run("prepare").status, 0);
+  assert.equal(statSync(join(scratch, "run.sh")).mode & 0o777, 0o555);
+  assert.equal(run("verify").status, 0);
+
+  chmodSync(join(scratch, "run.sh"), 0o444);
+  assert.deepEqual(drift(run("verify")), ["changed run.sh (executable bits)"]);
+});
+
 test("verify reports a source that disappeared from the repository, not from the copy", (t) => {
   const { repo, run } = prepared(t);
   unlinkSync(join(repo, "twin.txt"));

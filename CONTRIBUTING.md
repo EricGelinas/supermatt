@@ -95,7 +95,7 @@ This rechecks trace integrity and mechanical assertions against the matching cor
 
 ## Rules for a change
 
-[AGENTS.md](./AGENTS.md) states what an acceptable change must satisfy. Read it before you edit a skill. It covers the skill layout, the README entry, the `ask-supermatt` router, the version bump, the `CHANGELOG.md` entry, and the ban on em dashes.
+[AGENTS.md](./AGENTS.md) states what an acceptable change must satisfy. Read it before you edit a skill. It covers the skill layout, the README entry, the `ask-supermatt` router, the maintainer-controlled release policy, the Unreleased `CHANGELOG.md` entry, and the ban on em dashes.
 
 ## Open a pull request
 
