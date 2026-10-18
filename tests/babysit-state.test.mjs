@@ -39,7 +39,7 @@ function pullRequest(over = {}) {
 
 // A fake gh over one repository. `prs` is the host's pull request list and `live` the
 // GraphQL view of the babysat PR; every call is logged.
-function host({ prs = [], live = null } = {}) {
+function host({ prs = [], live = null, viewer = "me" } = {}) {
   const calls = [];
   const page = (nodes, args) => {
     const cursor = args.find((a) => a.startsWith("cursor="))?.slice(7);
@@ -50,9 +50,13 @@ function host({ prs = [], live = null } = {}) {
   const gh = (args) => {
     calls.push(args);
     const [group, verb] = args;
-    if (group === "pr" && verb === "list") {
-      const head = args[args.indexOf("--head") + 1];
-      return JSON.stringify(prs.filter((p) => p.headRefName === head && p.state === "OPEN").map((p) => ({ headRepositoryOwner: { login: "acme" }, ...p })));
+    if (group === "api" && verb.startsWith("repos/acme/app/pulls?")) {
+      const params = new URL(`https://api.github.com/${verb}`).searchParams;
+      const [owner, branch] = params.get("head").split(":");
+      const matches = prs.filter((p) => p.headRefName === branch && p.state === "OPEN" && (p.headRepositoryOwner?.login ?? "acme").toLowerCase() === owner.toLowerCase());
+      const pages = [];
+      for (let start = 0; start < matches.length || start === 0; start += 100) pages.push(matches.slice(start, start + 100));
+      return JSON.stringify(args.includes("--slurp") ? (args.includes("--paginate") ? pages : [pages[0]]) : pages[0]);
     }
     if (group === "pr" && verb === "view") {
       const pr = prs.find((p) => p.number === Number(args[2]));
@@ -79,9 +83,9 @@ function host({ prs = [], live = null } = {}) {
         baseRef: { target: { oid: p.baseOid }, refUpdateRule: p.required.length ? { requiredStatusCheckContexts: p.required } : null },
         commits: { nodes: [{ commit: { oid: p.headRefOid, statusCheckRollup: { contexts: page(p.checks, []) } } }] },
       };
-      return JSON.stringify({ data: { viewer: { login: "me" }, repository: { pullRequest } } });
+      return JSON.stringify({ data: { viewer: { login: viewer }, repository: { pullRequest } } });
     }
-    if (group === "api" && verb === "user") return "me\n";
+    if (group === "api" && verb === "user") return `${viewer}\n`;
     // The Actions jobs API: each job of a workflow run, every attempt, with its attempt number.
     // A job whose attempt is null is one the API does not list.
     const jobs = /^repos\/acme\/app\/actions\/runs\/(\d+)\/jobs\?filter=all&per_page=100$/.exec(verb);
@@ -143,6 +147,31 @@ test("several resumes reuse the existing PR, and a closed bound PR is never repl
   h.prs[0].state = "CLOSED";
   const afterClose = open(base(dir, h.gh));
   assert.deepEqual([afterClose.action, afterClose.pr], ["closed", 12]);
+});
+
+test("discovery reuses the owner's PR beyond thirty same-name fork heads", (t) => {
+  const prs = Array.from({ length: 130 }, (_, i) => ({
+    number: i + 1, state: "OPEN", headRefName: "feat/x", headRepositoryOwner: { login: `fork-${i}` },
+  }));
+  prs.push({ number: 200, url: "https://github.com/acme/app/pull/200", state: "OPEN", headRefName: "feat/x", headRepositoryOwner: { login: "me" } });
+  const h = host({ prs });
+  const found = open(base(stateDir(t), h.gh));
+  assert.deepEqual([found.action, found.pr], ["reuse", 200]);
+});
+
+test("discovery includes later-page matches when reporting an ambiguous head", (t) => {
+  const prs = Array.from({ length: 101 }, (_, i) => ({
+    number: i + 1, state: "OPEN", headRefName: "feat/x", headRepositoryOwner: { login: "acme" },
+  }));
+  const h = host({ prs });
+  assert.throws(() => open(base(stateDir(t), h.gh)), /several open PRs.*100, 101/);
+});
+
+test("discovery counts a repository owner and viewer with different casing only once", (t) => {
+  const h = host({ viewer: "Acme", prs: [{ number: 7, url: "https://github.com/acme/app/pull/7", state: "OPEN", headRefName: "feat/x" }] });
+  let found;
+  assert.doesNotThrow(() => { found = open(base(stateDir(t), h.gh)); });
+  assert.deepEqual([found.action, found.pr], ["reuse", 7]);
 });
 
 test("a PR named by number is bound to its own head branch", async (t) => {
@@ -803,7 +832,8 @@ function stubGh(t) {
   writeFileSync(join(bin, "gh"), `#!/bin/sh
 case "$1 $2" in
   "api user") echo me ;;
-  "pr list") cat "${join(bin, "prs.json")}" ;;
+  "api repos/acme/app/pulls?state=open&head=acme%3A"*) printf '['; cat "${join(bin, "prs.json")}"; printf ']' ;;
+  "api repos/acme/app/pulls?state=open&head=me%3A"*) echo '[[]]' ;;
   "pr view") echo '{"number":40,"url":"https://github.com/acme/app/pull/40","state":"OPEN","headRefName":"feat/x"}' ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
@@ -825,6 +855,29 @@ const cli = (bin, args, cwd) => spawnSync(process.execPath, [CLI, ...args], { cw
 // Every state file under dir, with its bytes.
 const tree = (dir) => !existsSync(dir) ? {} : Object.fromEntries(readdirSync(dir, { recursive: true }).map(String).sort()
   .filter((path) => statSync(join(dir, path)).isFile()).map((path) => [path, readFileSync(join(dir, path), "utf8")]));
+
+test("CLI open accepts a matching PR URL without dropping its repository identity", (t) => {
+  const { bin } = stubGh(t);
+  const { repo } = checkout(t);
+  const result = cli(bin, ["open", "--repo", "acme/app", "--pr", "https://github.com/acme/app/pull/40#discussion"], repo);
+  assert.equal(result.status, 0, result.stderr);
+  const opened = JSON.parse(result.stdout);
+  assert.deepEqual([opened.action, opened.pr], ["reuse", 40]);
+  assert.deepEqual(JSON.parse(readFileSync(opened.stateFile, "utf8")).repo, "acme/app");
+});
+
+test("CLI open rejects a PR URL for another repository or host without changing state", (t) => {
+  const { bin } = stubGh(t);
+  const { repo, states } = checkout(t);
+  assert.equal(cli(bin, ["open", "--repo", "acme/app"], repo).status, 0);
+  const before = tree(states);
+  for (const url of ["https://github.com/other/app/pull/40", "https://other.example/acme/app/pull/40", "https://github.com/acme/app/issues/40"]) {
+    const result = cli(bin, ["open", "--repo", "acme/app", "--pr", url], repo);
+    assert.equal(result.status, 1, url);
+    assert.match(result.stderr, /does not match selected repository acme\/app/);
+    assert.deepEqual(tree(states), before);
+  }
+});
 
 test("CLI open refuses a branch with several open PRs and binds none of them", (t) => {
   const { bin, setPrs } = stubGh(t);
@@ -897,6 +950,14 @@ test("CLI open refuses a detached HEAD without --pr and creates no state", (t) =
 test("CLI spend refuses an unknown kind before it spends anything", (t) => {
   const { stateFile } = babysat(t);
   refuses(t, stateFile, ["spend", "retry"], /retry/);
+});
+
+test("CLI spend rejects inherited property names without changing an exhausted budget", (t) => {
+  const { stateFile } = babysat(t);
+  spend(stateFile, "rerun");
+  for (const kind of ["constructor", "toString", "__proto__"]) {
+    refuses(t, stateFile, ["spend", kind], /unknown spend/);
+  }
 });
 
 test("CLI snapshot refuses a branch with no bound PR and asks for a bind", (t) => {
