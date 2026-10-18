@@ -2,6 +2,8 @@ Each skill is a directory directly under `skills/` (`skills/<name>/SKILL.md`), n
 
 Every skill must have an entry in the top-level `README.md`, under **Engineering** (daily code work) or **Productivity** (daily non-code workflow tools), that links the skill name to its `SKILL.md`. Each section groups its entries into **User-invoked** and **Model-invoked**.
 
+When a change affects setup, workflows, commands, data handling, or release behavior, update the relevant README, contributor, privacy, glossary, and agent documentation in the same change. Describe capability fallbacks and issue closure consistently with the skills that own them.
+
 Every `SKILL.md` is either user-invoked (`disable-model-invocation: true` plus `policy.allow_implicit_invocation: false` in `agents/openai.yaml`) or model-invoked. Claude Code, Codex, and Cursor enforce explicit-only metadata; OMP catalog hiding is not an authorization boundary. See [.agents/invocation.md](./.agents/invocation.md) and [references/harnesses.md](./references/harnesses.md).
 
 Any skill change must preserve the Claude Code, Codex, Cursor, and OMP implications in the harness contract: human invocation syntax, model-side composition, capability fallbacks, active-model family resolution, and honest reporting of unavailable independence. Do not infer model family from the harness name.
