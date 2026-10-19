@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `code-review`: a tree that can't be copied or built within a review, such as one with many gigabytes of binary assets, gets a no-copy reader prompt. Readers read the repository in place and name triggers for the host to run, instead of receiving a copy instruction that contradicts the axis prompt.
+- `retro`: accepts a session that moved into a directory inside the requested workspace, such as a worktree under the repository, instead of rejecting the whole transcript as mismatched. On Windows it reads Git Bash workspace paths such as `/c/repo` as drive paths.
+
 ## [0.23.0] - 2026-10-18
 
 ### Added
