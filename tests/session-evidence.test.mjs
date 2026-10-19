@@ -60,6 +60,46 @@ test("Claude rejects a transcript from another workspace", (t) => {
   assert.match(result.stderr, /mismatched claude transcript/);
 });
 
+function claudeSessionIn(home, ...workspaces) {
+  const session = join(home, ".claude", "projects", "-workspace-project", "claude-session.jsonl");
+  mkdirSync(dirname(session), { recursive: true });
+  const lines = workspaces.flatMap((cwd, index) => [
+    { type: "user", cwd, message: { role: "user", content: `user marker ${index}` } },
+    { type: "assistant", cwd, message: { role: "assistant", content: `assistant marker ${index}` } },
+  ]);
+  writeFileSync(session, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  return session;
+}
+
+test("Claude accepts a session that moved into a worktree inside the workspace", (t) => {
+  const home = workspace(t);
+  const session = claudeSessionIn(home, "/workspace/project", "/workspace/project/.claude/worktrees/feature", "/workspace/project/src");
+
+  const result = run(["--host", "claude", "--cwd", "/workspace/project", "--session", session], { HOME: home });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(texts(JSON.parse(result.stdout)).includes("assistant marker 1"));
+});
+
+test("Claude rejects a session that moved to a sibling whose name starts like the workspace", (t) => {
+  const home = workspace(t);
+  const session = claudeSessionIn(home, "/workspace/project", "/workspace/project-other");
+
+  const result = run(["--host", "claude", "--cwd", "/workspace/project", "--session", session], { HOME: home });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /mismatched claude transcript/);
+});
+
+test("Claude on Windows reads Git Bash workspace paths as drive paths", { skip: process.platform !== "win32" }, (t) => {
+  const home = workspace(t);
+  const session = claudeSessionIn(home, "C:\\workspace\\project", "/c/workspace/project/.claude/worktrees/feature");
+
+  const result = run(["--host", "claude", "--cwd", "C:\\workspace\\project", "--session", session], { HOME: home });
+
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("Codex preserves distinct failed calls with identical output", (t) => {
   const home = workspace(t);
   const session = join(home, ".codex", "sessions", "codex-session.jsonl");

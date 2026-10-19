@@ -17,6 +17,19 @@ function inside(root, path) {
   return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
+// A workspace as a transcript records it. Git Bash on Windows records MSYS paths, such as /c/repo for C:\repo.
+function workspacePath(path) {
+  const drive = process.platform === "win32" && /^\/([A-Za-z])(\/|$)/.exec(path);
+  return resolve(drive ? `${drive[1]}:/${path.slice(3)}` : path);
+}
+
+// Whether a recorded workspace is the requested one or a directory inside it, such as a worktree the session
+// moved into. Compares paths only, since a worktree may be gone by the time of the retrospective.
+function inWorkspace(cwd, recorded) {
+  const rel = relative(cwd, workspacePath(recorded));
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
 function text(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -136,7 +149,7 @@ function activeEntries(entries) {
 
 function ompRecords(path, main = false, cwd, entries = jsonl(path)) {
   const header = entries.find(({ value }) => value?.type === "session")?.value;
-  if (!header || resolve(header.cwd) !== cwd) fail(`unsupported or mismatched OMP transcript at ${path}`);
+  if (!header || typeof header.cwd !== "string" || !inWorkspace(cwd, header.cwd)) fail(`unsupported or mismatched OMP transcript at ${path}`);
   const records = [];
   for (const { line, value } of activeEntries(entries)) {
     if (["compaction", "branch_summary", "summary"].includes(value?.type)) {
@@ -290,7 +303,7 @@ function genericRecords(path, host, main, cwd) {
   const workspaces = host === "claude"
     ? entries.flatMap(({ value }) => typeof value?.cwd === "string" ? [value.cwd] : [])
     : entries.flatMap(({ value }) => value?.type === "session_meta" && typeof value.payload?.cwd === "string" ? [value.payload.cwd] : []);
-  if (!workspaces.length || workspaces.some((workspace) => resolve(workspace) !== cwd)) {
+  if (!workspaces.length || workspaces.some((workspace) => !inWorkspace(cwd, workspace))) {
     fail(`unsupported or mismatched ${host} transcript at ${path}`);
   }
   for (const { line, value } of entries) {
@@ -379,8 +392,8 @@ function requestedFile(host, request, roots, cwd) {
         if (typeof id === "string") {
           identified = true;
           // The first complete identity ends discovery; selected transcripts are still parsed in full.
-          if (typeof item.cwd === "string") return id === request && resolve(item.cwd) === cwd;
-        } else if (named && typeof item.cwd === "string" && resolve(item.cwd) === cwd) {
+          if (typeof item.cwd === "string") return id === request && inWorkspace(cwd, item.cwd);
+        } else if (named && typeof item.cwd === "string" && inWorkspace(cwd, item.cwd)) {
           fallback = true;
         }
       }
@@ -435,7 +448,7 @@ try {
   });
   if (!HOSTS.has(values.host)) fail(`unknown host: ${values.host ?? "missing"}`);
   if (!values.cwd || !isAbsolute(values.cwd)) fail("--cwd must be an absolute path");
-  process.stdout.write(`${JSON.stringify(evidence(values.host, resolve(values.cwd), values.session))}\n`);
+  process.stdout.write(`${JSON.stringify(evidence(values.host, workspacePath(values.cwd), values.session))}\n`);
 } catch (error) {
   process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;
