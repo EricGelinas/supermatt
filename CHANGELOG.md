@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- `code-review`: a tree that can't be copied or built within a review, such as one with many gigabytes of binary assets, gets a no-copy reader prompt. Readers read the repository in place and name triggers for the host to run, instead of receiving a copy instruction that contradicts the axis prompt.
+- `code-review`: a tree that can't be copied or built within a review, such as one with many gigabytes of binary assets, gets a no-copy reader prompt. Readers read the repository in place and name triggers for the host to run, instead of receiving a copy instruction that contradicts the axis prompt. Untracked files are collected by `scripts/untracked-diff.sh`, because a host that loads the skill with arguments substituted the `$1` in the inline snippet, so the diff silently left them out.
 - `implement-spec`: names the host session's scratch directory as a resource parallel workers share, so each gets its own subfolder, and gives each fix round to a fresh worker instead of resuming one whose context spans earlier rounds.
 - `retro`: accepts a session that moved into a directory inside the requested workspace, such as a worktree under the repository, instead of rejecting the whole transcript as mismatched. On Windows it reads Git Bash workspace paths such as `/c/repo` as drive paths.
 

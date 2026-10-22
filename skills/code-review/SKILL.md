@@ -26,18 +26,7 @@ The issue tracker should have been provided to you. If `docs/agents/issue-tracke
 
 Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). If they didn't specify one and HEAD is on a branch other than the default branch, the fixed point is the default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus its `origin/`): name it in one line and carry on. On the default branch with uncommitted changes, the fixed point is `HEAD`: name it in one line and carry on. On a clean default branch, ask.
 
-Resolve the merge-base once with `git merge-base <fixed-point> HEAD`, create a fresh `mktemp -d` directory (`$DIR` below), and write the diff into it: `git diff <merge-base-sha> > "$DIR/diff.patch"` (against the merge-base, and including uncommitted changes to tracked files). Require that command to succeed, then append every untracked file:
-
-```sh
-git ls-files -z --others --exclude-standard > "$DIR/untracked" &&
-xargs -0 -I{} sh -c '
-  git diff --no-index -- /dev/null "$1"
-  status=$?
-  [ "$status" -le 1 ] || exit 255
-' sh {} < "$DIR/untracked" >> "$DIR/diff.patch"
-```
-
-Only Git diff statuses 0 (equal) and 1 (different) are accepted. Any other status stops collection; require the entire command to succeed before using the diff. That file is the diff every reader reads: a shell hook can shorten a diff printed to the terminal, and a redirected one lands on disk whole. Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Resolve the merge-base once with `git merge-base <fixed-point> HEAD`, create a fresh `mktemp -d` directory (`$DIR` below), and write the diff into it: `git diff <merge-base-sha> > "$DIR/diff.patch"` (against the merge-base, and including uncommitted changes to tracked files). Require that command to succeed, then append every untracked file with the installed [untracked-diff helper](scripts/untracked-diff.sh), run from the repository root: `sh "<this skill directory>/scripts/untracked-diff.sh" "$DIR"`. It lists them in `$DIR/untracked` and accepts only Git diff statuses 0 (equal) and 1 (different); any other status stops collection, so require it to exit zero before using the diff. That file is the diff every reader reads: a shell hook can shorten a diff printed to the terminal, and a redirected one lands on disk whole. Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside six parallel readers.
 
